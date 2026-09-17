@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import time
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -70,11 +71,63 @@ def _fmt_int(v: Optional[int]) -> str:
     return f"{v:,}" if v is not None else "暂无数据"
 
 
+def _usd(value: Any) -> str:
+    """WorldCodes 金额已经是美元，保留小数，不使用 quota_divisor。"""
+    try:
+        amount = Decimal(str(value))
+        if amount.is_finite():
+            return f"${amount:,.2f}"
+    except (InvalidOperation, ValueError, TypeError):
+        pass
+    return "暂无数据"
+
+
+def _obj(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _usage_report(data: Dict[str, Any]) -> str:
+    """按明确字段解析 /v1/usage，避免将 Key 消费误标为全账号消费。"""
+    mode = data.get("mode")
+    if mode not in ("unrestricted", "quota_limited"):
+        return "无法识别 /v1/usage 响应，请检查站点和接口配置"
+    if data.get("isValid") is False:
+        return "API Key 不可用，请检查 Key 状态"
+    lines = ["📊 额度与用量", "━━━━━━━━━━━━"]
+    if mode == "quota_limited":
+        quota = _obj(data.get("quota"))
+        if quota:
+            lines.append(f"✅ 当前 Key 剩余额度：{_usd(quota.get('remaining'))}")
+        for limit in data.get("rate_limits") or []:
+            if isinstance(limit, dict):
+                lines.append(f"⏳ 当前 Key {limit.get('window', '')} 剩余额度：{_usd(limit.get('remaining'))}")
+        lines.append("账号钱包余额：此 Key 的接口响应未提供")
+    elif "balance" in data:
+        lines.append(f"✅ 账号钱包余额：{_usd(data['balance'])}")
+    else:
+        remaining = data.get("remaining")
+        label = "无限制" if remaining == -1 else _usd(remaining)
+        lines.append(f"✅ 订阅剩余额度：{label}")
+    if data.get("status"):
+        lines.append(f"Key 状态：{data['status']}")
+    usage = _obj(data.get("usage"))
+    total, today = _obj(usage.get("total")), _obj(usage.get("today"))
+    lines.extend([
+        "━━━━━━━━━━━━",
+        f"📉 当前 Key 累计消费：{_usd(total.get('actual_cost'))}",
+        f"🪙 当前 Key 累计 Token：{_fmt_int(_to_int(total.get('total_tokens')))}",
+        f"📅 当前 Key 今日消费：{_usd(today.get('actual_cost'))}",
+        f"🪙 当前 Key 今日 Token：{_fmt_int(_to_int(today.get('total_tokens')))}",
+        "金额单位：USD；今日按站点统计口径",
+    ])
+    return "\n".join(lines)
+
+
 @register(
     "astrbot_plugin_quota_checker",
     "Zxin-Pro",
     "查询 AI 中转站（One-API / New-API 等）的额度与 Token 消耗统计",
-    "v1.1.0",
+    "v1.0.1",
     "https://github.com/Zxin-Pro/astrbot_plugin_quota_checker",
 )
 class QuotaCheckerPlugin(Star):
@@ -197,43 +250,6 @@ class QuotaCheckerPlugin(Star):
                 break
         return quota_sum, token_sum
 
-    # ---------- /v1/usage 格式化 ----------
-
-    def _money(self, value: Any, unit: str) -> str:
-        try:
-            v = float(value)
-        except (TypeError, ValueError):
-            return "暂无数据"
-        unit = (unit or "USD").upper()
-        if unit == "USD":
-            return f"${v:,.2f}"
-        return f"{v:,.2f} {unit}"
-
-    def _format_v1_usage(self, data: Dict[str, Any]) -> str:
-        usage = data.get("usage") or {}
-        total = usage.get("total") or {}
-        today = usage.get("today") or {}
-        unit = str(data.get("unit") or "USD")
-
-        def num(d: Dict[str, Any], key: str) -> Optional[int]:
-            return _to_int(d.get(key))
-
-        remain = data.get("remaining")
-        if remain is None:
-            remain = data.get("balance")
-        lines = [
-            "📊 账户统计",
-            "━━━━━━━━━━━━",
-            f"📉 总消耗额度：{self._money(total.get('cost'), unit)}",
-            f"🪙 总 Token：{_fmt_int(num(total, 'total_tokens'))}",
-            "━━━━━━━━━━━━",
-            f"📅 当日消耗额度：{self._money(today.get('cost'), unit)}",
-            f"🪙 当日 Token：{_fmt_int(num(today, 'total_tokens'))}",
-            "━━━━━━━━━━━━",
-            f"✅ 剩余额度：{self._money(remain, unit)}",
-        ]
-        return "\n".join(lines)
-
     # ---------- 命令 ----------
 
     @filter.command("额度")
@@ -253,20 +269,22 @@ class QuotaCheckerPlugin(Star):
         try:
             timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout) as http:
-                divisor = _to_int(self._cfg("quota_divisor", 500000)) or 500000
-
-                # 0) /v1/usage（优先）：自定义统计接口，一次返回全部数据（New-API 变体/自定义站点）
-                try:
-                    st, data = await self._get(http, str(self._cfg("api_path_v1_usage", "/v1/usage")))
-                    if st == 200 and isinstance(data, dict) and isinstance(data.get("usage"), dict):
-                        yield event.plain_result(self._format_v1_usage(data))
-                        return
+                # 用户信息路径设为 /v1/usage 时，使用 WorldCodes/Sub2API 协议。
+                # 一次请求已包含余额和当前 Key 用量，不再调用 New API 状态或日志接口。
+                if str(self._cfg("api_path_user", "")).strip() == "/v1/usage":
+                    st, data = await self._get(http, "/v1/usage")
                     if st in (401, 403):
-                        yield event.plain_result("Token 无效或已过期，或权限不足")
-                        return
-                    # 404 等其他状态 → 回退到标准 One-API 接口族
-                except (aiohttp.ClientError, asyncio.TimeoutError):
-                    raise
+                        message = f"额度查询被拒绝（HTTP {st}），请检查 Key、权限或站点访问限制"
+                    elif st == 404:
+                        message = "接口路径错误（HTTP 404），请使用站点根地址和 /v1/usage"
+                    elif st != 200 or not isinstance(data, dict):
+                        message = f"额度接口返回异常（HTTP {st}），请检查插件日志和站点响应"
+                    else:
+                        message = _usage_report(data)
+                    yield event.plain_result(message)
+                    return
+
+                divisor = _to_int(self._cfg("quota_divisor", 500000)) or 500000
 
                 # 1) /api/status（可选）：自动检测 quota_per_unit
                 try:
