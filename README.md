@@ -31,7 +31,8 @@
 | base_url | string | 中转站地址，如 `https://your-newapi.com` |
 | api_key | string | 访问令牌（Token） |
 | api_path_user | string | 用户信息接口路径，默认 `/api/user/self` |
-| api_path_usage | string | Token 用量接口路径，默认 `/api/usage/token` |
+| api_path_usage | string | Token 用量接口路径（标准流程用），默认 `/api/usage/token` |
+| api_path_v1_usage | string | 自定义统计接口（优先使用，一次返回全部数据），默认 `/v1/usage`；worldcodes 等站点用 sk- key 即可 |
 | api_path_log | string | 日志接口路径，默认 `/api/log` |
 | quota_divisor | int | 额度换算除数，默认 500000；若站点 `/api/status` 返回 `quota_per_unit` 会自动覆盖 |
 | api_user_id | string | 中转站用户 ID（New-API 需要，作为 `New-Api-User` 头发送；同时会附带 `Veloera-User`） |

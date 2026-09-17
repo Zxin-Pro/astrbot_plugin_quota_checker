@@ -15,9 +15,14 @@
     "default": "/api/user/self"
   },
   "api_path_usage": {
-    "description": "Token 用量接口路径（已用/剩余 Token）",
+    "description": "Token 用量接口路径（标准 One-API 流程用，/v1/usage 可用时忽略）",
     "type": "string",
     "default": "/api/usage/token"
+  },
+  "api_path_v1_usage": {
+    "description": "自定义统计接口路径（如 worldcodes 的 /v1/usage，一次返回全部数据，优先使用）",
+    "type": "string",
+    "default": "/v1/usage"
   },
   "api_path_log": {
     "description": "日志接口路径（当日消耗统计，需管理员权限）",

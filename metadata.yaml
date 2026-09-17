@@ -1,5 +1,5 @@
 name: astrbot_plugin_quota_checker
 desc: 查询 AI 中转站（One-API / New-API 等）的额度与 Token 消耗统计，发送 /额度 获取已用额度、总 Token、当日消耗与剩余额度
-version: v1.0.1
+version: v1.1.0
 author: Zxin-Pro
 repo: https://github.com/Zxin-Pro/astrbot_plugin_quota_checker

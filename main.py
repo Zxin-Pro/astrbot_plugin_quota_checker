@@ -74,7 +74,7 @@ def _fmt_int(v: Optional[int]) -> str:
     "astrbot_plugin_quota_checker",
     "Zxin-Pro",
     "查询 AI 中转站（One-API / New-API 等）的额度与 Token 消耗统计",
-    "v1.0.1",
+    "v1.1.0",
     "https://github.com/Zxin-Pro/astrbot_plugin_quota_checker",
 )
 class QuotaCheckerPlugin(Star):
@@ -197,6 +197,43 @@ class QuotaCheckerPlugin(Star):
                 break
         return quota_sum, token_sum
 
+    # ---------- /v1/usage 格式化 ----------
+
+    def _money(self, value: Any, unit: str) -> str:
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return "暂无数据"
+        unit = (unit or "USD").upper()
+        if unit == "USD":
+            return f"${v:,.2f}"
+        return f"{v:,.2f} {unit}"
+
+    def _format_v1_usage(self, data: Dict[str, Any]) -> str:
+        usage = data.get("usage") or {}
+        total = usage.get("total") or {}
+        today = usage.get("today") or {}
+        unit = str(data.get("unit") or "USD")
+
+        def num(d: Dict[str, Any], key: str) -> Optional[int]:
+            return _to_int(d.get(key))
+
+        remain = data.get("remaining")
+        if remain is None:
+            remain = data.get("balance")
+        lines = [
+            "📊 账户统计",
+            "━━━━━━━━━━━━",
+            f"📉 总消耗额度：{self._money(total.get('cost'), unit)}",
+            f"🪙 总 Token：{_fmt_int(num(total, 'total_tokens'))}",
+            "━━━━━━━━━━━━",
+            f"📅 当日消耗额度：{self._money(today.get('cost'), unit)}",
+            f"🪙 当日 Token：{_fmt_int(num(today, 'total_tokens'))}",
+            "━━━━━━━━━━━━",
+            f"✅ 剩余额度：{self._money(remain, unit)}",
+        ]
+        return "\n".join(lines)
+
     # ---------- 命令 ----------
 
     @filter.command("额度")
@@ -217,6 +254,19 @@ class QuotaCheckerPlugin(Star):
             timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout) as http:
                 divisor = _to_int(self._cfg("quota_divisor", 500000)) or 500000
+
+                # 0) /v1/usage（优先）：自定义统计接口，一次返回全部数据（New-API 变体/自定义站点）
+                try:
+                    st, data = await self._get(http, str(self._cfg("api_path_v1_usage", "/v1/usage")))
+                    if st == 200 and isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                        yield event.plain_result(self._format_v1_usage(data))
+                        return
+                    if st in (401, 403):
+                        yield event.plain_result("Token 无效或已过期，或权限不足")
+                        return
+                    # 404 等其他状态 → 回退到标准 One-API 接口族
+                except (aiohttp.ClientError, asyncio.TimeoutError):
+                    raise
 
                 # 1) /api/status（可选）：自动检测 quota_per_unit
                 try:
