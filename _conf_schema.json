@@ -35,9 +35,9 @@
     "default": ""
   },
   "extra_headers": {
-    "description": "额外自定义请求头（JSON 对象，如 {\"Veloera-User\": \"1\"}）",
-    "type": "object",
-    "default": {}
+    "description": "额外自定义请求头，JSON 格式字符串，如 {\"Veloera-User\": \"1\"}（可为空）",
+    "type": "string",
+    "default": ""
   },
   "allowed_groups": {
     "description": "允许使用的群号列表，留空则所有群可用（私聊不受限制）",

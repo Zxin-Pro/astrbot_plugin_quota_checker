@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import json
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -73,7 +74,7 @@ def _fmt_int(v: Optional[int]) -> str:
     "astrbot_plugin_quota_checker",
     "Zxin-Pro",
     "查询 AI 中转站（One-API / New-API 等）的额度与 Token 消耗统计",
-    "1.0.0",
+    v1.0.1",
     "https://github.com/Zxin-Pro/astrbot_plugin_quota_checker",
 )
 class QuotaCheckerPlugin(Star):
@@ -103,7 +104,13 @@ class QuotaCheckerPlugin(Star):
         if user_id:
             headers["New-Api-User"] = user_id
             headers["Veloera-User"] = user_id  # 不同中转站头名不同，多带无副作用
-        extra = self._cfg("extra_headers", {}) or {}
+        extra = self._cfg("extra_headers", "") or ""
+        if isinstance(extra, str):
+            try:
+                extra = json.loads(extra) if extra.strip() else {}
+            except json.JSONDecodeError:
+                logger.warning(f"[quota_checker] extra_headers 不是合法 JSON，已忽略: {extra}")
+                extra = {}
         if isinstance(extra, dict):
             headers.update({str(k): str(v) for k, v in extra.items()})
         return headers
