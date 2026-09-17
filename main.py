@@ -74,7 +74,7 @@ def _fmt_int(v: Optional[int]) -> str:
     "astrbot_plugin_quota_checker",
     "Zxin-Pro",
     "查询 AI 中转站（One-API / New-API 等）的额度与 Token 消耗统计",
-    v1.0.1",
+    "v1.0.1",
     "https://github.com/Zxin-Pro/astrbot_plugin_quota_checker",
 )
 class QuotaCheckerPlugin(Star):
