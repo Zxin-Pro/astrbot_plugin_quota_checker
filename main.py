@@ -86,7 +86,7 @@ def _obj(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _usage_report(data: Dict[str, Any]) -> str:
+def _usage_report(data: Dict[str, Any], show_usage: bool = True) -> str:
     """按明确字段解析 /v1/usage，避免将 Key 消费误标为全账号消费。"""
     mode = data.get("mode")
     if mode not in ("unrestricted", "quota_limited"):
@@ -98,28 +98,30 @@ def _usage_report(data: Dict[str, Any]) -> str:
         quota = _obj(data.get("quota"))
         if quota:
             lines.append(f"✅ 当前 Key 剩余额度：{_usd(quota.get('remaining'))}")
-        for limit in data.get("rate_limits") or []:
-            if isinstance(limit, dict):
-                lines.append(f"⏳ 当前 Key {limit.get('window', '')} 剩余额度：{_usd(limit.get('remaining'))}")
-        lines.append("账号钱包余额：此 Key 的接口响应未提供")
+        if show_usage:
+            for limit in data.get("rate_limits") or []:
+                if isinstance(limit, dict):
+                    lines.append(f"⏳ 当前 Key {limit.get('window', '')} 剩余额度：{_usd(limit.get('remaining'))}")
+            lines.append("账号钱包余额：此 Key 的接口响应未提供")
     elif "balance" in data:
         lines.append(f"✅ 账号钱包余额：{_usd(data['balance'])}")
     else:
         remaining = data.get("remaining")
         label = "无限制" if remaining == -1 else _usd(remaining)
         lines.append(f"✅ 订阅剩余额度：{label}")
-    if data.get("status"):
-        lines.append(f"Key 状态：{data['status']}")
-    usage = _obj(data.get("usage"))
-    total, today = _obj(usage.get("total")), _obj(usage.get("today"))
-    lines.extend([
-        "━━━━━━━━━━━━",
-        f"📉 当前 Key 累计消费：{_usd(total.get('actual_cost'))}",
-        f"🪙 当前 Key 累计 Token：{_fmt_int(_to_int(total.get('total_tokens')))}",
-        f"📅 当前 Key 今日消费：{_usd(today.get('actual_cost'))}",
-        f"🪙 当前 Key 今日 Token：{_fmt_int(_to_int(today.get('total_tokens')))}",
-        "金额单位：USD；今日按站点统计口径",
-    ])
+    if show_usage:
+        if data.get("status"):
+            lines.append(f"Key 状态：{data['status']}")
+        usage = _obj(data.get("usage"))
+        total, today = _obj(usage.get("total")), _obj(usage.get("today"))
+        lines.extend([
+            "━━━━━━━━━━━━",
+            f"📉 当前 Key 累计消费：{_usd(total.get('actual_cost'))}",
+            f"🪙 当前 Key 累计 Token：{_fmt_int(_to_int(total.get('total_tokens')))}",
+            f"📅 当前 Key 今日消费：{_usd(today.get('actual_cost'))}",
+            f"🪙 当前 Key 今日 Token：{_fmt_int(_to_int(today.get('total_tokens')))}",
+            "金额单位：USD；今日按站点统计口径",
+        ])
     return "\n".join(lines)
 
 
@@ -280,7 +282,7 @@ class QuotaCheckerPlugin(Star):
                     elif st != 200 or not isinstance(data, dict):
                         message = f"额度接口返回异常（HTTP {st}），请检查插件日志和站点响应"
                     else:
-                        message = _usage_report(data)
+                        message = _usage_report(data, show_usage=bool(self._cfg("show_usage", False)))
                     yield event.plain_result(message)
                     return
 

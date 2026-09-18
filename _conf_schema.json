@@ -10,9 +10,14 @@
     "default": ""
   },
   "api_path_user": {
-    "description": "用户信息接口路径（已用/剩余额度）",
+    "description": "用户信息接口路径（填 /v1/usage 时启用 WorldCodes/Sub2API 协议）",
     "type": "string",
     "default": "/api/user/self"
+  },
+  "show_usage": {
+    "description": "是否显示消费与 Token 统计（关闭时仅显示余额）",
+    "type": "bool",
+    "default": false
   },
   "api_path_usage": {
     "description": "Token 用量接口路径（标准 One-API 流程用，/v1/usage 可用时忽略）",
