@@ -15,9 +15,14 @@
     "default": "/api/user/self"
   },
   "show_usage": {
-    "description": "是否显示消费与 Token 统计（关闭时仅显示余额）",
+    "description": "是否显示消费与 Token 统计（关闭时仅显示余额；设置了自定义模板时此开关失效）",
     "type": "bool",
     "default": false
+  },
+  "template": {
+    "description": "自定义回复模板（留空则用默认报表）。占位符：{balance} 钱包余额、{remaining} 剩余、{key_remaining} Key剩余、{plan_name} 套餐、{unit} 单位、{mode} 模式、{status} 状态、{total_cost} 累计消费、{total_tokens} 累计Token、{total_requests} 累计次数、{today_cost} 今日消费、{today_tokens} 今日Token、{today_requests} 今日次数",
+    "type": "text",
+    "default": "✅ 账号钱包余额：{balance}"
   },
   "api_path_usage": {
     "description": "Token 用量接口路径（标准 One-API 流程用，/v1/usage 可用时忽略）",

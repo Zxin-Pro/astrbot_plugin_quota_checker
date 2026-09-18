@@ -86,6 +86,59 @@ def _obj(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _tpl_money(value: Any, unit: str) -> str:
+    try:
+        amount = Decimal(str(value))
+        if amount.is_finite():
+            u = (unit or "USD").upper()
+            return f"${amount:,.2f}" if u == "USD" else f"{amount:,.2f} {u}"
+    except (InvalidOperation, ValueError, TypeError):
+        pass
+    return "暂无数据"
+
+
+def _render_template(tpl: str, data: Dict[str, Any]) -> str:
+    """自定义模板渲染，支持 {balance} {total_cost} 等占位符"""
+    unit = str(data.get("unit") or "USD")
+    usage = _obj(data.get("usage"))
+    total, today = _obj(usage.get("total")), _obj(usage.get("today"))
+    quota = _obj(data.get("quota"))
+
+    balance = data.get("balance")
+    if balance is None:
+        r = data.get("remaining")
+        balance = "无限制" if r == -1 else r
+    balance_text = balance if isinstance(balance, str) else _tpl_money(balance, unit)
+
+    remaining = data.get("remaining")
+    if remaining == -1:
+        remaining_text = "无限制"
+    elif remaining is None:
+        remaining_text = "暂无数据"
+    else:
+        remaining_text = _tpl_money(remaining, unit)
+
+    mapping = {
+        "balance": balance_text,
+        "remaining": remaining_text,
+        "key_remaining": _tpl_money(quota.get("remaining"), unit),
+        "plan_name": str(data.get("planName") or "暂无数据"),
+        "unit": unit,
+        "mode": str(data.get("mode") or "暂无数据"),
+        "status": str(data.get("status") or "暂无数据"),
+        "total_cost": _tpl_money(total.get("actual_cost"), unit),
+        "total_tokens": _fmt_int(_to_int(total.get("total_tokens"))),
+        "total_requests": _fmt_int(_to_int(total.get("requests"))),
+        "today_cost": _tpl_money(today.get("actual_cost"), unit),
+        "today_tokens": _fmt_int(_to_int(today.get("total_tokens"))),
+        "today_requests": _fmt_int(_to_int(today.get("requests"))),
+    }
+    out = tpl
+    for k, v in mapping.items():
+        out = out.replace("{" + k + "}", str(v))
+    return out
+
+
 def _usage_report(data: Dict[str, Any], show_usage: bool = True) -> str:
     """按明确字段解析 /v1/usage，避免将 Key 消费误标为全账号消费。"""
     mode = data.get("mode")
@@ -282,7 +335,13 @@ class QuotaCheckerPlugin(Star):
                     elif st != 200 or not isinstance(data, dict):
                         message = f"额度接口返回异常（HTTP {st}），请检查插件日志和站点响应"
                     else:
-                        message = _usage_report(data, show_usage=bool(self._cfg("show_usage", False)))
+                        tpl = str(self._cfg("template", "") or "").strip()
+                        if tpl and data.get("isValid") is not False:
+                            message = _render_template(tpl, data)
+                        elif data.get("isValid") is False:
+                            message = "API Key 不可用，请检查 Key 状态"
+                        else:
+                            message = _usage_report(data, show_usage=bool(self._cfg("show_usage", False)))
                     yield event.plain_result(message)
                     return
 
