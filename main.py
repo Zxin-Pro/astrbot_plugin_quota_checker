@@ -82,6 +82,32 @@ def _usd(value: Any) -> str:
     return "暂无数据"
 
 
+_NUM_FIELDS = (
+    "actual_cost", "cost", "cache_creation_tokens", "cache_read_tokens",
+    "input_tokens", "output_tokens", "requests", "total_tokens",
+)
+
+
+def _agg_usage(usages: List[Dict[str, Any]], bucket: str) -> Dict[str, Any]:
+    """跨 Key 求和 usage.total / usage.today 的数值字段"""
+    out: Dict[str, Any] = {}
+    for f in _NUM_FIELDS:
+        s: Any = None
+        for u in usages:
+            v = _obj(u.get(bucket)).get(f)
+            if v is None:
+                continue
+            try:
+                x = Decimal(str(v))
+            except (InvalidOperation, ValueError, TypeError):
+                continue
+            if not x.is_finite():
+                continue
+            s = x if s is None else s + x
+        out[f] = float(s) if s is not None else 0
+    return out
+
+
 def _obj(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -327,6 +353,7 @@ class QuotaCheckerPlugin(Star):
         balance_block: Optional[str] = None
         first_data: Optional[Dict[str, Any]] = None
         usage_blocks: List[str] = []
+        usage_list: List[Dict[str, Any]] = []
         sum_total = sum_today = 0
         has_tok = False
         for i, entry in enumerate(entries, 1):
@@ -343,9 +370,9 @@ class QuotaCheckerPlugin(Star):
                     if i == 1:  # 余额固定用第一个 Key
                         first_data = data
                     usage_blocks.append(self._fmt_key_usage(label, data))
-                    usage = _obj(data.get("usage"))
-                    t = _to_int(_obj(usage.get("total")).get("total_tokens"))
-                    d = _to_int(_obj(usage.get("today")).get("total_tokens"))
+                    usage_list.append(_obj(data.get("usage")))
+                    t = _to_int(_obj(data.get("usage")).get("total", {}).get("total_tokens"))
+                    d = _to_int(_obj(data.get("usage")).get("today", {}).get("total_tokens"))
                     if t is not None or d is not None:
                         sum_total += t or 0
                         sum_today += d or 0
@@ -361,12 +388,12 @@ class QuotaCheckerPlugin(Star):
             if i < len(entries):
                 await asyncio.sleep(0.3)  # 轻微间隔，防限流
         if first_data is not None:
-            # {total_tokens} 显示所有 Key 的 Token 合计
+            # 模板统计占位符显示所有 Key 的合计（Token/消费/请求，今日+累计）
             merged = dict(first_data)
             usage = dict(_obj(first_data.get("usage")))
-            total = dict(_obj(usage.get("total")))
-            total["total_tokens"] = sum_total if has_tok else total.get("total_tokens")
-            usage["total"] = total
+            if usage_list:
+                usage["total"] = _agg_usage(usage_list, "total")
+                usage["today"] = _agg_usage(usage_list, "today")
             merged["usage"] = usage
             balance_block = _render_template(tpl, merged) if tpl else _usage_report(merged, show_usage=False)
         if balance_block is None:
