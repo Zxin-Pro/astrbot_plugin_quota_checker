@@ -325,6 +325,7 @@ class QuotaCheckerPlugin(Star):
         path = str(self._cfg("api_path_v1_usage", "/v1/usage")) or "/v1/usage"
         tpl = str(self._cfg("template", "") or "").strip()
         balance_block: Optional[str] = None
+        first_data: Optional[Dict[str, Any]] = None
         usage_blocks: List[str] = []
         sum_total = sum_today = 0
         has_tok = False
@@ -340,7 +341,7 @@ class QuotaCheckerPlugin(Star):
                 st, data = await self._get(http, path, api_key=key)
                 if st == 200 and isinstance(data, dict) and data.get("isValid") is not False:
                     if i == 1:  # 余额固定用第一个 Key
-                        balance_block = _render_template(tpl, data) if tpl else _usage_report(data, show_usage=False)
+                        first_data = data
                     usage_blocks.append(self._fmt_key_usage(label, data))
                     usage = _obj(data.get("usage"))
                     t = _to_int(_obj(usage.get("total")).get("total_tokens"))
@@ -359,6 +360,15 @@ class QuotaCheckerPlugin(Star):
                 usage_blocks.append(f"📋 {label}\n❌ 无法连接到中转站")
             if i < len(entries):
                 await asyncio.sleep(0.3)  # 轻微间隔，防限流
+        if first_data is not None:
+            # {total_tokens} 显示所有 Key 的 Token 合计
+            merged = dict(first_data)
+            usage = dict(_obj(first_data.get("usage")))
+            total = dict(_obj(usage.get("total")))
+            total["total_tokens"] = sum_total if has_tok else total.get("total_tokens")
+            usage["total"] = total
+            merged["usage"] = usage
+            balance_block = _render_template(tpl, merged) if tpl else _usage_report(merged, show_usage=False)
         if balance_block is None:
             balance_block = "❌ 余额查询失败（第一个 Key 无效或网络异常）"
         blocks = [balance_block] + usage_blocks
