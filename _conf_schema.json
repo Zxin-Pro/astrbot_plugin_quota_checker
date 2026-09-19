@@ -39,6 +39,16 @@
     "type": "string",
     "default": "收到 正在查询…"
   },
+  "report_enable": {
+    "description": "每日 0:00 向管理员推送昨日 Token 用量报告（23:59:30 自动快照当日用量）",
+    "type": "bool",
+    "default": true
+  },
+  "notify_admins": {
+    "description": "接收每日报告的管理员 QQ 号列表；留空则使用 AstrBot 全局管理员（WebUI 管理员）",
+    "type": "list",
+    "default": []
+  },
   "api_path_usage": {
     "description": "Token 用量接口路径（标准 One-API 流程用，/v1/usage 可用时忽略）",
     "type": "string",

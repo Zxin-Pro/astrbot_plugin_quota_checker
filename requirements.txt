@@ -1,1 +1,2 @@
 aiohttp>=3.8
+apscheduler>=3.10,<4

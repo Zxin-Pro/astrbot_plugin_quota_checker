@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import json
+import os
 import time
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
@@ -10,6 +11,19 @@ import aiohttp
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
+
+try:
+    from astrbot.core.message.message_event_result import MessageChain
+except Exception:  # 兼容旧版
+    try:
+        from astrbot.api.message import MessageChain
+    except Exception:
+        MessageChain = None
+
+try:
+    from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+except Exception:
+    get_astrbot_plugin_data_path = None
 
 USER_AGENT = "AstrBot-QuotaChecker/1.0"
 
@@ -208,13 +222,14 @@ def _usage_report(data: Dict[str, Any], show_usage: bool = True) -> str:
     "astrbot_plugin_quota_checker",
     "Zxin-Pro",
     "查询 AI 中转站（One-API / New-API 等）的额度与 Token 消耗统计",
-    "v1.3.0",
+    "v1.4.0",
     "https://github.com/Zxin-Pro/astrbot_plugin_quota_checker",
 )
 class QuotaCheckerPlugin(Star):
     def __init__(self, context: Context, config: Dict[str, Any] = None):
         super().__init__(context)
         self.config = config or {}
+        self._scheduler = None
 
     # ---------- 配置辅助 ----------
 
@@ -405,6 +420,180 @@ class QuotaCheckerPlugin(Star):
         else:
             blocks = [balance_block]
         return "\n\n".join(blocks)
+
+    # ---------- 每日报告 ----------
+
+    def _snapshot_path(self) -> str:
+        try:
+            base = get_astrbot_plugin_data_path()
+        except Exception:
+            base = os.path.join("data", "plugin_data")
+        d = os.path.join(str(base), "astrbot_plugin_quota_checker")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
+        return os.path.join(d, "daily_snapshot.json")
+
+    async def _collect_usage(self) -> Optional[Dict[str, Any]]:
+        """聚合所有 Key 的 usage 与余额（余额取第一个有效 Key）"""
+        if not self._base_url():
+            return None
+        entries = [str(k).strip() for k in (self._cfg("api_keys", []) or []) if str(k).strip()]
+        if not entries:
+            k = str(self._cfg("api_key", "") or "").strip()
+            entries = [k] if k else []
+        if not entries:
+            return None
+        path = str(self._cfg("api_path_v1_usage", "/v1/usage")) or "/v1/usage"
+        usages: List[Dict[str, Any]] = []
+        first_balance: Any = None
+        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as http:
+                for i, entry in enumerate(entries):
+                    if ":" in entry and not entry.lstrip().lower().startswith("sk-"):
+                        key = entry.split(":", 1)[1].strip()
+                    else:
+                        key = entry
+                    st, data = await self._get(http, path, api_key=key)
+                    if st == 200 and isinstance(data, dict) and data.get("isValid") is not False:
+                        usages.append(_obj(data.get("usage")))
+                        if first_balance is None:
+                            bal = data.get("balance")
+                            if bal is None:
+                                bal = data.get("remaining")
+                            try:
+                                v = Decimal(str(bal))
+                                if v.is_finite():
+                                    first_balance = v
+                            except (InvalidOperation, ValueError, TypeError):
+                                pass
+                    if i < len(entries) - 1:
+                        await asyncio.sleep(0.3)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.error(f"[quota_checker] 每日报告取数失败: {e}")
+            return None
+        if not usages:
+            return None
+        return {
+            "total": _agg_usage(usages, "total"),
+            "today": _agg_usage(usages, "today"),
+            "balance": float(first_balance) if first_balance is not None else None,
+        }
+
+    async def _snapshot_today_usage(self):
+        """23:59:30 快照当日用量（跨 0 点后即昨日数据）"""
+        data = await self._collect_usage()
+        if data is None:
+            logger.warning("[quota_checker] 每日快照失败：取数为空")
+            return
+        data["date"] = datetime.date.today().isoformat()
+        try:
+            with open(self._snapshot_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            logger.info(f"[quota_checker] 每日快照完成: {data['date']}")
+        except OSError as e:
+            logger.error(f"[quota_checker] 快照写入失败: {e}")
+
+    def _resolve_admin_ids(self) -> List[str]:
+        admins = [str(a).strip() for a in (self._cfg("notify_admins", []) or []) if str(a).strip()]
+        if not admins:
+            try:
+                admins = [str(a).strip() for a in (self.context.get_config().get("admins_id", []) or []) if str(a).strip()]
+            except Exception:
+                admins = []
+        return admins
+
+    async def _send_to_admins(self, text: str) -> bool:
+        admins = self._resolve_admin_ids()
+        if not admins:
+            logger.warning("[quota_checker] 未配置管理员（notify_admins / 全局 admins_id），无法发送每日报告")
+            return False
+        if MessageChain is None:
+            logger.error("[quota_checker] MessageChain 导入失败，无法发送每日报告")
+            return False
+        try:
+            insts = list(self.context.platform_manager.get_platform_insts())
+        except Exception:
+            try:
+                insts = list(self.context.platform_manager.platform_insts)
+            except Exception:
+                insts = []
+        names = []
+        for inst in insts:
+            try:
+                names.append(inst.meta().name)
+            except Exception:
+                try:
+                    names.append(inst.module_name)
+                except Exception:
+                    pass
+        chain = MessageChain().message(text)
+        for admin in admins:
+            sent = False
+            for name in names:
+                umo = f"{name}:FriendMessage:{admin}"
+                try:
+                    ok = await self.context.send_message(umo, chain)
+                    if ok:
+                        sent = True
+                        break
+                except Exception as e:
+                    logger.warning(f"[quota_checker] 每日报告发送失败 {umo}: {e}")
+            if not sent:
+                logger.error(f"[quota_checker] 管理员 {admin} 的每日报告全部发送失败")
+        return True
+
+    async def _send_daily_report(self):
+        """0:00 发送昨日用量报告"""
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        snap: Optional[Dict[str, Any]] = None
+        try:
+            with open(self._snapshot_path(), "r", encoding="utf-8") as f:
+                snap = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+        if not snap or snap.get("date") != yesterday:
+            text = f"📊 每日 Token 报告（{yesterday}）\n❌ 昨日数据缺失（插件当时可能未运行）"
+            await self._send_to_admins(text)
+            return
+        today_agg = _obj(snap.get("today"))
+        balance = snap.get("balance")
+        lines = [
+            f"📊 每日 Token 报告（{yesterday}）",
+            f"🪙 昨日 Token 用量：{_fmt_int(_to_int(today_agg.get('total_tokens')))}",
+            f"📉 昨日消耗额度：{_tpl_money(today_agg.get('actual_cost'), 'USD')}",
+            f"💰 钱包余额：{_tpl_money(balance, 'USD')}",
+        ]
+        await self._send_to_admins("\n".join(lines))
+
+    def initialize(self):
+        if not bool(self._cfg("report_enable", True)):
+            return
+        try:
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        except ImportError:
+            logger.error("[quota_checker] 未安装 apscheduler，每日报告不可用")
+            return
+        try:
+            self._scheduler = AsyncIOScheduler()
+            self._scheduler.add_job(self._snapshot_today_usage, "cron",
+                                    hour=23, minute=59, second=30, id="daily_snapshot")
+            self._scheduler.add_job(self._send_daily_report, "cron",
+                                    hour=0, minute=0, second=30, id="daily_report")
+            self._scheduler.start()
+            logger.info("[quota_checker] 每日报告已启动（23:59:30 快照 / 0:00 推送管理员）")
+        except Exception as e:
+            logger.error(f"[quota_checker] 每日报告启动失败: {e}")
+
+    async def terminate(self):
+        if self._scheduler:
+            try:
+                self._scheduler.shutdown(wait=False)
+            except Exception:
+                pass
+            self._scheduler = None
 
     # ---------- 命令 ----------
 
