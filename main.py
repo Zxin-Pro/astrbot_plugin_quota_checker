@@ -182,7 +182,7 @@ def _usage_report(data: Dict[str, Any], show_usage: bool = True) -> str:
     "astrbot_plugin_quota_checker",
     "Zxin-Pro",
     "查询 AI 中转站（One-API / New-API 等）的额度与 Token 消耗统计",
-    "v1.0.1",
+    "v1.3.0",
     "https://github.com/Zxin-Pro/astrbot_plugin_quota_checker",
 )
 class QuotaCheckerPlugin(Star):
@@ -202,9 +202,10 @@ class QuotaCheckerPlugin(Star):
             base = "https://" + base
         return base
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self, api_key: Optional[str] = None) -> Dict[str, str]:
+        key = str(api_key or self._cfg("api_key", "") or "").strip()
         headers = {
-            "Authorization": f"Bearer {str(self._cfg('api_key', '') or '').strip()}",
+            "Authorization": f"Bearer {key}",
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
         }
@@ -230,10 +231,11 @@ class QuotaCheckerPlugin(Star):
         http: aiohttp.ClientSession,
         path: str,
         params: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
     ) -> Tuple[int, Optional[Dict[str, Any]]]:
         url = self._base_url() + path
         try:
-            async with http.get(url, params=params, headers=self._headers()) as resp:
+            async with http.get(url, params=params, headers=self._headers(api_key)) as resp:
                 status = resp.status
                 try:
                     data = await resp.json(content_type=None)
@@ -305,6 +307,55 @@ class QuotaCheckerPlugin(Star):
                 break
         return quota_sum, token_sum
 
+    # ---------- 多 Key 查询 ----------
+
+    async def _multi_key_report(self, http: aiohttp.ClientSession, entries: List[str]) -> str:
+        """逐个查询多个 Key 的 /v1/usage，渲染模板后拼成一条消息"""
+        path = str(self._cfg("api_path_v1_usage", "/v1/usage")) or "/v1/usage"
+        tpl = str(self._cfg("template", "") or "").strip()
+        show_usage = bool(self._cfg("show_usage", False))
+        blocks: List[str] = []
+        balance_sum: Any = Decimal(0)
+        has_balance = False
+        for i, entry in enumerate(entries, 1):
+            if ":" in entry and not entry.lstrip().lower().startswith("sk-"):
+                label, key = entry.split(":", 1)
+                label, key = label.strip(), key.strip()
+            else:
+                label, key = "", entry
+            if not label:
+                label = f"Key {i}（*{key[-4:]}）" if len(key) >= 4 else f"Key {i}"
+            try:
+                st, data = await self._get(http, path, api_key=key)
+                if st == 200 and isinstance(data, dict) and data.get("isValid") is not False:
+                    body = _render_template(tpl, data) if tpl else _usage_report(data, show_usage=show_usage)
+                    block = f"📋 {label}\n{body}"
+                    bal = data.get("balance")
+                    if bal is None:
+                        bal = data.get("remaining")
+                    try:
+                        v = Decimal(str(bal))
+                        if v.is_finite():
+                            balance_sum += v
+                            has_balance = True
+                    except (InvalidOperation, ValueError, TypeError):
+                        pass
+                elif st in (401, 403):
+                    block = f"📋 {label}\n❌ Token 无效或已过期，或权限不足"
+                elif st == 404:
+                    block = f"📋 {label}\n❌ 接口路径错误，请检查配置"
+                else:
+                    block = f"📋 {label}\n❌ 查询失败（HTTP {st}）"
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                block = f"📋 {label}\n❌ 无法连接到中转站"
+            blocks.append(block)
+            if i < len(entries):
+                await asyncio.sleep(0.3)  # 轻微间隔，防限流
+        if len(entries) > 1 and has_balance:
+            unit = "USD"
+            blocks.append(f"💰 合计余额：{_tpl_money(balance_sum, unit)}")
+        return "\n\n".join(blocks)
+
     # ---------- 命令 ----------
 
     @filter.command("额度")
@@ -317,15 +368,22 @@ class QuotaCheckerPlugin(Star):
             if allowed and str(gid) not in allowed:
                 return
 
-        if not self._base_url() or not str(self._cfg("api_key", "") or "").strip():
+        if not self._base_url() or (
+            not str(self._cfg("api_key", "") or "").strip() and not (self._cfg("api_keys", []) or [])
+        ):
             yield event.plain_result("请先在插件配置中填写中转站地址和令牌")
             return
 
         try:
             timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout) as http:
+                # 多 Key 模式：配置了 api_keys 时逐个查询 /v1/usage（WorldCodes/Sub2API 协议）
+                keys_cfg = [str(k).strip() for k in (self._cfg("api_keys", []) or []) if str(k).strip()]
+                if keys_cfg:
+                    yield event.plain_result(await self._multi_key_report(http, keys_cfg))
+                    return
+
                 # 用户信息路径设为 /v1/usage 时，使用 WorldCodes/Sub2API 协议。
-                # 一次请求已包含余额和当前 Key 用量，不再调用 New API 状态或日志接口。
                 if str(self._cfg("api_path_user", "")).strip() == "/v1/usage":
                     st, data = await self._get(http, "/v1/usage")
                     if st in (401, 403):

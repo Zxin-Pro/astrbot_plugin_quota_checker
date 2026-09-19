@@ -5,9 +5,14 @@
     "default": ""
   },
   "api_key": {
-    "description": "访问令牌（Token）",
+    "description": "访问令牌（Token，单个 Key；多 Key 请用下方 api_keys）",
     "type": "string",
     "default": ""
+  },
+  "api_keys": {
+    "description": "多 Key 列表（填了就走多 Key 模式，逐个查询并汇总）。每项一个 Key，支持 \"备注:sk-xxx\" 格式自定义名称，不写备注则显示 Key 尾号",
+    "type": "list",
+    "default": []
   },
   "api_path_user": {
     "description": "用户信息接口路径（填 /v1/usage 时启用 WorldCodes/Sub2API 协议）",
