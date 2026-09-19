@@ -309,14 +309,25 @@ class QuotaCheckerPlugin(Star):
 
     # ---------- 多 Key 查询 ----------
 
+    def _fmt_key_usage(self, label: str, data: Dict[str, Any]) -> str:
+        """单个 Key 的用量块（Token + 消费）"""
+        unit = str(data.get("unit") or "USD")
+        usage = _obj(data.get("usage"))
+        total, today = _obj(usage.get("total")), _obj(usage.get("today"))
+        return "\n".join([
+            f"📋 {label}",
+            f"🪙 累计 Token：{_fmt_int(_to_int(total.get('total_tokens')))} ｜ 今日：{_fmt_int(_to_int(today.get('total_tokens')))}",
+            f"📉 累计消费：{_tpl_money(total.get('actual_cost'), unit)} ｜ 今日：{_tpl_money(today.get('actual_cost'), unit)}",
+        ])
+
     async def _multi_key_report(self, http: aiohttp.ClientSession, entries: List[str]) -> str:
-        """逐个查询多个 Key 的 /v1/usage，渲染模板后拼成一条消息"""
+        """余额取第一个 Key，全部 Key 逐个查用量后汇总"""
         path = str(self._cfg("api_path_v1_usage", "/v1/usage")) or "/v1/usage"
         tpl = str(self._cfg("template", "") or "").strip()
-        show_usage = bool(self._cfg("show_usage", False))
-        blocks: List[str] = []
-        balance_sum: Any = Decimal(0)
-        has_balance = False
+        balance_block: Optional[str] = None
+        usage_blocks: List[str] = []
+        sum_total = sum_today = 0
+        has_tok = False
         for i, entry in enumerate(entries, 1):
             if ":" in entry and not entry.lstrip().lower().startswith("sk-"):
                 label, key = entry.split(":", 1)
@@ -328,32 +339,31 @@ class QuotaCheckerPlugin(Star):
             try:
                 st, data = await self._get(http, path, api_key=key)
                 if st == 200 and isinstance(data, dict) and data.get("isValid") is not False:
-                    body = _render_template(tpl, data) if tpl else _usage_report(data, show_usage=show_usage)
-                    block = f"📋 {label}\n{body}"
-                    bal = data.get("balance")
-                    if bal is None:
-                        bal = data.get("remaining")
-                    try:
-                        v = Decimal(str(bal))
-                        if v.is_finite():
-                            balance_sum += v
-                            has_balance = True
-                    except (InvalidOperation, ValueError, TypeError):
-                        pass
+                    if i == 1:  # 余额固定用第一个 Key
+                        balance_block = _render_template(tpl, data) if tpl else _usage_report(data, show_usage=False)
+                    usage_blocks.append(self._fmt_key_usage(label, data))
+                    usage = _obj(data.get("usage"))
+                    t = _to_int(_obj(usage.get("total")).get("total_tokens"))
+                    d = _to_int(_obj(usage.get("today")).get("total_tokens"))
+                    if t is not None or d is not None:
+                        sum_total += t or 0
+                        sum_today += d or 0
+                        has_tok = True
                 elif st in (401, 403):
-                    block = f"📋 {label}\n❌ Token 无效或已过期，或权限不足"
+                    usage_blocks.append(f"📋 {label}\n❌ Token 无效或已过期，或权限不足")
                 elif st == 404:
-                    block = f"📋 {label}\n❌ 接口路径错误，请检查配置"
+                    usage_blocks.append(f"📋 {label}\n❌ 接口路径错误，请检查配置")
                 else:
-                    block = f"📋 {label}\n❌ 查询失败（HTTP {st}）"
+                    usage_blocks.append(f"📋 {label}\n❌ 查询失败（HTTP {st}）")
             except (aiohttp.ClientError, asyncio.TimeoutError):
-                block = f"📋 {label}\n❌ 无法连接到中转站"
-            blocks.append(block)
+                usage_blocks.append(f"📋 {label}\n❌ 无法连接到中转站")
             if i < len(entries):
                 await asyncio.sleep(0.3)  # 轻微间隔，防限流
-        if len(entries) > 1 and has_balance:
-            unit = "USD"
-            blocks.append(f"💰 合计余额：{_tpl_money(balance_sum, unit)}")
+        if balance_block is None:
+            balance_block = "❌ 余额查询失败（第一个 Key 无效或网络异常）"
+        blocks = [balance_block] + usage_blocks
+        if len(entries) > 1 and has_tok:
+            blocks.append(f"🪙 合计 Token：{_fmt_int(sum_total)} ｜ 今日：{_fmt_int(sum_today)}")
         return "\n\n".join(blocks)
 
     # ---------- 命令 ----------

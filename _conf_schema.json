@@ -10,7 +10,7 @@
     "default": ""
   },
   "api_keys": {
-    "description": "多 Key 列表（填了就走多 Key 模式，逐个查询并汇总）。每项一个 Key，支持 \"备注:sk-xxx\" 格式自定义名称，不写备注则显示 Key 尾号",
+    "description": "多 Key 列表（填了就走多 Key 模式）：余额取第一个 Key，全部 Key 逐个查用量汇总。每项一个 Key，支持 \"备注:sk-xxx\" 格式自定义名称，不写备注则显示 Key 尾号",
     "type": "list",
     "default": []
   },
