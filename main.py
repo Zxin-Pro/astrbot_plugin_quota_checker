@@ -568,7 +568,7 @@ class QuotaCheckerPlugin(Star):
         ]
         await self._send_to_admins("\n".join(lines))
 
-    def initialize(self):
+    async def initialize(self):
         if not bool(self._cfg("report_enable", True)):
             return
         try:
