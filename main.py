@@ -523,12 +523,15 @@ class QuotaCheckerPlugin(Star):
         names = []
         for inst in insts:
             try:
-                names.append(inst.meta().name)
+                meta = inst.meta()
+                # v4.28 send_message 按 meta().id 匹配平台，id 不在时回退 name
+                names.append(getattr(meta, "id", None) or meta.name)
             except Exception:
                 try:
                     names.append(inst.module_name)
                 except Exception:
                     pass
+        logger.info(f"[quota_checker] 每日报告目标平台: {names} 管理员: {admins}")
         chain = MessageChain().message(text)
         for admin in admins:
             sent = False
