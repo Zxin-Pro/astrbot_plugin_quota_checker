@@ -371,9 +371,12 @@ class QuotaCheckerPlugin(Star):
             balance_block = _render_template(tpl, merged) if tpl else _usage_report(merged, show_usage=False)
         if balance_block is None:
             balance_block = "❌ 余额查询失败（第一个 Key 无效或网络异常）"
-        blocks = [balance_block] + usage_blocks
-        if len(entries) > 1 and has_tok:
-            blocks.append(f"🪙 合计 Token：{_fmt_int(sum_total)} ｜ 今日：{_fmt_int(sum_today)}")
+        if bool(self._cfg("show_key_details", False)):
+            blocks = [balance_block] + usage_blocks
+            if len(entries) > 1 and has_tok:
+                blocks.append(f"🪙 合计 Token：{_fmt_int(sum_total)} ｜ 今日：{_fmt_int(sum_today)}")
+        else:
+            blocks = [balance_block]
         return "\n\n".join(blocks)
 
     # ---------- 命令 ----------
@@ -393,6 +396,10 @@ class QuotaCheckerPlugin(Star):
         ):
             yield event.plain_result("请先在插件配置中填写中转站地址和令牌")
             return
+
+        ack = str(self._cfg("received_reply", "") or "").strip()
+        if ack:
+            yield event.plain_result(ack)
 
         try:
             timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)

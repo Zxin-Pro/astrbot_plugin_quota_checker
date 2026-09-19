@@ -25,9 +25,19 @@
     "default": false
   },
   "template": {
-    "description": "自定义回复模板（留空则用默认报表）。占位符：{balance} 钱包余额、{remaining} 剩余、{key_remaining} Key剩余、{plan_name} 套餐、{unit} 单位、{mode} 模式、{status} 状态、{total_cost} 累计消费、{total_tokens} 累计Token、{total_requests} 累计次数、{today_cost} 今日消费、{today_tokens} 今日Token、{today_requests} 今日次数",
+    "description": "自定义回复模板（留空则用默认报表）。占位符：{balance} 钱包余额、{remaining} 剩余、{key_remaining} Key剩余、{plan_name} 套餐、{unit} 单位、{mode} 模式、{status} 状态、{total_cost} 累计消费、{total_tokens} 累计Token（多 Key 模式显示总和）、{total_requests} 累计次数、{today_cost} 今日消费、{today_tokens} 今日Token、{today_requests} 今日次数",
     "type": "text",
     "default": "✅ 账号钱包余额：{balance}"
+  },
+  "show_key_details": {
+    "description": "多 Key 模式下是否显示每个 Key 的用量明细（关闭时只显示模板/余额结果）",
+    "type": "bool",
+    "default": false
+  },
+  "received_reply": {
+    "description": "收到 /额度 命令后先回复的自定义词（多 Key 查询较慢时可作提示；留空则不回复）",
+    "type": "string",
+    "default": "收到 正在查询…"
   },
   "api_path_usage": {
     "description": "Token 用量接口路径（标准 One-API 流程用，/v1/usage 可用时忽略）",
